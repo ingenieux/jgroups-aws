@@ -23,6 +23,8 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
+import org.apache.commons.lang.text.StrLookup;
+import org.apache.commons.lang.text.StrSubstitutor;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
 import org.apache.http.client.HttpClient;
@@ -30,10 +32,10 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.util.EntityUtils;
 import org.jgroups.PhysicalAddress;
-import org.jgroups.protocols.Discovery;
-import org.jgroups.stack.IpAddress;
 import org.jgroups.annotations.Property;
 import org.jgroups.conf.ClassConfigurator;
+import org.jgroups.protocols.Discovery;
+import org.jgroups.stack.IpAddress;
 import org.w3c.dom.Node;
 
 import com.amazonaws.AmazonServiceException;
@@ -202,7 +204,7 @@ public class AWS_PING extends Discovery {
    * The EC2 client used to look up cluster members.
    */
   private AmazonEC2 ec2;
-
+  
   /**
    * Scans the environment for information about the AWS node that we are
    * currently running on and parses the filters and tags.
@@ -223,9 +225,9 @@ public class AWS_PING extends Discovery {
     }
 
     if (filters != null)
-      awsFilters = parseFilters(filters);
+      awsFilters = parseFilters(replaceVars(filters));
     if (tags != null)
-      awsTagNames = parseTagNames(tags);
+      awsTagNames = parseTagNames(replaceVars(tags));
 
     if (log.isDebugEnabled()) {
       if (filters != null)
@@ -237,8 +239,46 @@ public class AWS_PING extends Discovery {
     endpoint = "ec2." + availabilityZone.replaceAll("(.*-\\d+)[^-\\d]+", "$1")
         + ".amazonaws.com";
   }
+  
+  class SelfLookup extends StrLookup {
+	@Override
+	public String lookup(String key) {
+		if (key.equals("environmentName")) {
+			return getEnvironmentName();
+		}
+		
+		return null;
+	}
 
-  /**
+	private String getEnvironmentName() {
+		/*
+		 * Grab the current environment name
+		 */
+		DescribeInstancesRequest request = new DescribeInstancesRequest()
+				.withInstanceIds(instanceId)
+				.withFilters(
+						new Filter("instance-state-name").withValues("running"));
+	
+		for (Reservation r : ec2.describeInstances(request)
+				.getReservations()) {
+			for (Instance i : r.getInstances()) {
+				for (Tag t : i.getTags()) {
+					if ("elasticbeanstalk:environment-name".equals(t.getKey())) {
+						return t.getValue();
+					}
+				}
+			}
+		}
+	
+		return null;
+	}
+  }
+
+  private String replaceVars(String input) {
+	return new StrSubstitutor(new SelfLookup()).replace(input);
+  }
+
+/**
    * Starts this protocol.
    */
   public void start() throws Exception {
